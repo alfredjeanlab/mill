@@ -1,0 +1,20 @@
+[package]
+name = "mill-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mill-config = { path = "../config" }
+parking_lot = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+hickory-proto = "0.25"
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[lints]
+workspace = true

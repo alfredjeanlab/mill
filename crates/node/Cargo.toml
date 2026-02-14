@@ -1,0 +1,43 @@
+[package]
+name = "mill-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mill-config = { path = "../config" }
+mill-raft = { path = "../raft" }
+mill-containerd = { path = "../containerd" }
+mill-net = { path = "../net" }
+mill-proxy = { path = "../proxy" }
+
+axum = { workspace = true }
+tower-http = { version = "0.6", features = ["trace"] }
+
+hex = "0.4"
+num_cpus = "1"
+openraft = "0.9"
+parking_lot = { workspace = true }
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sysinfo = "0.33"
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+bytesize = { workspace = true }
+subtle = "2"
+humantime = { workspace = true }
+
+[dev-dependencies]
+mill-support = { path = "../support" }
+tempfile.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+tokio = { workspace = true, features = ["test-util"] }
+yare = { workspace = true }
+
+[lints]
+workspace = true

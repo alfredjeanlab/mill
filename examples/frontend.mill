@@ -1,0 +1,65 @@
+# Web application with Redis and a background worker.
+#
+# Setup:
+#   mill secret set app.session-secret "$(openssl rand -hex 32)"
+#   mill secret set app.database-url "postgres://user:pass@dbhost/myapp"
+#
+# Deploy:
+#   mill deploy -f examples/frontend.mill
+#
+# Verify:
+#   curl https://myapp.example.com/health
+#   mill status
+
+service "web" {
+  image    = "myapp:latest"
+  port     = 3000
+  replicas = 2
+  cpu      = 0.5
+  memory   = "512M"
+
+  env {
+    DATABASE_URL   = "${secret(app.database-url)}"
+    REDIS_URL      = "tcp://${service.redis.address}"
+    SESSION_SECRET = "${secret(app.session-secret)}"
+  }
+
+  health {
+    path     = "/health"
+    interval = "10s"
+  }
+
+  route "myapp.example.com" {
+    path = "/"
+  }
+}
+
+service "redis" {
+  image  = "redis:7-alpine"
+  port   = 6379
+  cpu    = 0.25
+  memory = "256M"
+
+  volume "redis-data" {
+    path = "/data"
+    size = "1Gi"
+  }
+}
+
+service "worker" {
+  image  = "myapp:latest"
+  port   = 9090
+  cpu    = 1
+  memory = "1G"
+
+  env {
+    DATABASE_URL = "${secret(app.database-url)}"
+    REDIS_URL    = "tcp://${service.redis.address}"
+    MODE         = "worker"
+  }
+
+  health {
+    path     = "/health"
+    interval = "30s"
+  }
+}

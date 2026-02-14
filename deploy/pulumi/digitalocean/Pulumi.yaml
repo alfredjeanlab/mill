@@ -1,0 +1,18 @@
+name: mill-digitalocean
+runtime: nodejs
+description: Mill cluster on DigitalOcean
+config:
+  digitalocean:token:
+    secret: true
+  mill-digitalocean:sshKeyFingerprint:
+    description: Fingerprint of the SSH key to add to droplets
+  mill-digitalocean:region:
+    default: nyc1
+  mill-digitalocean:nodeCount:
+    default: 3
+  mill-digitalocean:nodeSize:
+    default: s-2vcpu-4gb
+  mill-digitalocean:clusterName:
+    default: mill
+  mill-digitalocean:millVersion:
+    default: latest

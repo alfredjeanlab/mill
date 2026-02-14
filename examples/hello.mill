@@ -1,0 +1,20 @@
+# Minimal example: single nginx service with public ingress.
+#
+# Deploy:
+#   mill deploy -f examples/hello.mill
+#
+# Verify:
+#   curl https://hello.example.com
+#   mill status
+#   mill logs hello
+
+service "hello" {
+  image  = "nginx:alpine"
+  port   = 80
+  cpu    = 0.25
+  memory = "128M"
+
+  route "hello.example.com" {
+    path = "/"
+  }
+}

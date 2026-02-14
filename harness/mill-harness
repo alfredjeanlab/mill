@@ -1,0 +1,311 @@
+#!/bin/bash
+# mill-harness — Test environment manager for mill smoke tests.
+#
+# On macOS: manages a Lima VM with WireGuard, containerd, and network namespaces.
+# On Linux: runs directly with sudo (no VM needed).
+#
+# Usage:
+#   mill-harness up          Boot VM (or verify Linux prerequisites)
+#   mill-harness down        Stop VM (no-op on Linux)
+#   mill-harness destroy     Delete VM entirely
+#   mill-harness build       Build mill binary inside the environment
+#   mill-harness test [-- args]  Full pipeline: up → build → setup → test → teardown
+#   mill-harness exec <cmd>  Run command inside the environment
+#   mill-harness ssh         Interactive shell into VM
+#   mill-harness clean       Run netns-teardown inside the environment
+#   mill-harness status      Show VM state + namespace list
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+N="${MILL_HARNESS_NODES:-3}"
+VM="${MILL_HARNESS_VM:-mill}"
+TEST_FILTER="${MILL_TEST_FILTER:-}"
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+WORKSPACE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Inside the Lima VM, ~ is mounted at /workspace.
+# Compute the VM project path by replacing $HOME with /workspace.
+# If already inside the VM, WORKSPACE_DIR will start with /workspace; use it as-is.
+if [[ "$WORKSPACE_DIR" == /workspace* ]]; then
+    VM_PROJECT_DIR="$WORKSPACE_DIR"
+else
+    VM_PROJECT_DIR="/workspace${WORKSPACE_DIR#$HOME}"
+fi
+
+# ---------------------------------------------------------------------------
+# Platform detection
+# ---------------------------------------------------------------------------
+
+IS_LINUX=false
+IS_MACOS=false
+case "$(uname -s)" in
+    Linux)  IS_LINUX=true ;;
+    Darwin) IS_MACOS=true ;;
+    *)      echo "Unsupported platform: $(uname -s)"; exit 1 ;;
+esac
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_vm_running() {
+    if $IS_MACOS; then
+        limactl list --json 2>/dev/null | grep -q "\"name\":\"$VM\".*\"status\":\"Running\""
+    else
+        return 0  # Linux: always "running"
+    fi
+}
+
+_vm_exists() {
+    if $IS_MACOS; then
+        limactl list --json 2>/dev/null | grep -q "\"name\":\"$VM\""
+    else
+        return 0
+    fi
+}
+
+_vm_exec() {
+    if $IS_MACOS; then
+        limactl shell "$VM" -- bash -c "cd '$VM_PROJECT_DIR' && $*"
+    else
+        bash -c "cd '$WORKSPACE_DIR' && $*"
+    fi
+}
+
+_vm_exec_sudo() {
+    if $IS_MACOS; then
+        # sudo drops env vars; explicitly set Rust toolchain paths for the Lima user.
+        local lima_home
+        lima_home="$(limactl shell "$VM" -- bash -c 'echo $HOME' 2>/dev/null | tr -d '[:space:]')"
+        limactl shell "$VM" -- sudo \
+            RUSTUP_HOME="$lima_home/.rustup" \
+            CARGO_HOME="$lima_home/.cargo" \
+            PATH="$lima_home/.cargo/bin:$PATH" \
+            bash -c "cd '$VM_PROJECT_DIR' && $*"
+    else
+        sudo bash -c "cd '$WORKSPACE_DIR' && $*"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+cmd_up() {
+    if $IS_MACOS; then
+        if ! command -v limactl &>/dev/null; then
+            echo "Error: limactl not found. Install Lima: brew install lima"
+            exit 1
+        fi
+        if ! _vm_exists; then
+            echo "Creating VM '$VM' from harness/mill.yaml..."
+            limactl create --name="$VM" "$SCRIPT_DIR/mill.yaml" --tty=false
+            limactl start "$VM"
+            echo "VM '$VM' created and started."
+        elif ! _vm_running; then
+            echo "Starting VM '$VM'..."
+            limactl start "$VM"
+            echo "VM '$VM' started."
+        else
+            echo "VM '$VM' is already running."
+        fi
+    else
+        # Linux: verify prerequisites.
+        local missing=()
+        for cmd in containerd wg ip cargo; do
+            command -v "$cmd" &>/dev/null || missing+=("$cmd")
+        done
+        if [ ${#missing[@]} -gt 0 ]; then
+            echo "Error: missing prerequisites: ${missing[*]}"
+            echo "Install: apt-get install containerd wireguard-tools iproute2"
+            exit 1
+        fi
+        echo "Linux: prerequisites OK"
+    fi
+}
+
+cmd_down() {
+    if $IS_MACOS; then
+        if _vm_running; then
+            echo "Stopping VM '$VM'..."
+            limactl stop "$VM"
+            echo "VM '$VM' stopped."
+        else
+            echo "VM '$VM' is not running."
+        fi
+    else
+        echo "Linux: no VM to stop."
+    fi
+}
+
+cmd_destroy() {
+    if $IS_MACOS; then
+        if _vm_exists; then
+            echo "Destroying VM '$VM'..."
+            limactl delete --force "$VM"
+            echo "VM '$VM' destroyed."
+        else
+            echo "VM '$VM' does not exist."
+        fi
+    else
+        echo "Linux: no VM to destroy."
+    fi
+}
+
+cmd_build() {
+    echo "Building mill binary..."
+    if $IS_MACOS; then
+        _vm_exec "source \$HOME/.cargo/env && CARGO_TARGET_DIR=$VM_PROJECT_DIR/target-linux cargo build -p mill"
+    else
+        CARGO_TARGET_DIR="$WORKSPACE_DIR/target-linux" cargo build -p mill --manifest-path "$WORKSPACE_DIR/Cargo.toml"
+    fi
+    echo "Build complete."
+}
+
+cmd_test() {
+    # Parse optional test arguments after --.
+    local test_args=()
+    local saw_separator=false
+    for arg in "$@"; do
+        if $saw_separator; then
+            test_args+=("$arg")
+        elif [ "$arg" = "--" ]; then
+            saw_separator=true
+        fi
+    done
+
+    # Full pipeline: up → build → netns-setup → test → netns-teardown
+    cmd_up
+    cmd_build
+
+    echo "Setting up $N network namespaces..."
+    _vm_exec_sudo "bash '$VM_PROJECT_DIR/harness/netns-setup.sh' $N"
+
+    # Ensure teardown runs on exit (success or failure).
+    trap "_vm_exec_sudo \"bash '$VM_PROJECT_DIR/harness/netns-teardown.sh' $N\"" EXIT
+
+    echo "Running smoke tests..."
+    local filter_arg=""
+    if [ -n "$TEST_FILTER" ]; then
+        filter_arg="$TEST_FILTER"
+    fi
+
+    local extra_args=""
+    if [ ${#test_args[@]} -gt 0 ]; then
+        extra_args="${test_args[*]}"
+    fi
+
+    if $IS_MACOS; then
+        _vm_exec_sudo "\
+            CARGO_TARGET_DIR=$VM_PROJECT_DIR/target-linux \
+            MILL_HARNESS=1 \
+            MILL_HARNESS_NODES=$N \
+            cargo test -p smoke $filter_arg -- --test-threads=1 $extra_args"
+    else
+        # On Linux, tests need root access to network namespaces.
+        # Use RUSTUP_TOOLCHAIN and explicitly set PATH to include cargo bin.
+        local home_dir
+        home_dir="$(eval echo ~${SUDO_USER:-root})"
+        local cargo_path
+        if command -v cargo &>/dev/null; then
+            cargo_path="$(dirname "$(command -v cargo)")"
+        else
+            cargo_path="$home_dir/.cargo/bin:/root/.cargo/bin"
+        fi
+        sudo \
+            CARGO_TARGET_DIR="$WORKSPACE_DIR/target-linux" \
+            MILL_HARNESS=1 \
+            MILL_HARNESS_NODES="$N" \
+            RUSTUP_TOOLCHAIN=stable \
+            PATH="$cargo_path:$PATH" \
+            bash -c "cd '$WORKSPACE_DIR' && cargo test -p smoke --manifest-path Cargo.toml $filter_arg -- --test-threads=1 $extra_args"
+    fi
+
+    echo "Smoke tests complete."
+}
+
+cmd_exec() {
+    shift  # remove "exec" from args
+    _vm_exec "$*"
+}
+
+cmd_ssh() {
+    if $IS_MACOS; then
+        limactl shell "$VM"
+    else
+        echo "Linux: already on the host. Use 'sudo -i' for root shell."
+    fi
+}
+
+cmd_clean() {
+    echo "Cleaning up namespaces..."
+    _vm_exec_sudo "bash $VM_PROJECT_DIR/harness/netns-teardown.sh $N"
+    echo "Cleanup complete."
+}
+
+cmd_status() {
+    if $IS_MACOS; then
+        echo "=== Lima VM ==="
+        limactl list | grep -E "NAME|$VM" || echo "  VM '$VM' not found"
+        echo ""
+        if _vm_running; then
+            echo "=== Network Namespaces ==="
+            _vm_exec_sudo "ip netns list 2>/dev/null || echo '  (none)'"
+            echo ""
+            echo "=== Bridge ==="
+            _vm_exec_sudo "ip addr show mill-br0 2>/dev/null || echo '  mill-br0 not found'"
+        fi
+    else
+        echo "=== Platform: Linux (no VM) ==="
+        echo ""
+        echo "=== Network Namespaces ==="
+        sudo ip netns list 2>/dev/null || echo "  (none)"
+        echo ""
+        echo "=== Bridge ==="
+        sudo ip addr show mill-br0 2>/dev/null || echo "  mill-br0 not found"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Dispatch
+# ---------------------------------------------------------------------------
+
+case "${1:-help}" in
+    up)       cmd_up ;;
+    down)     cmd_down ;;
+    destroy)  cmd_destroy ;;
+    build)    cmd_build ;;
+    test)     cmd_test "$@" ;;
+    exec)     cmd_exec "$@" ;;
+    ssh)      cmd_ssh ;;
+    clean)    cmd_clean ;;
+    status)   cmd_status ;;
+    help|--help|-h)
+        echo "Usage: mill-harness <command>"
+        echo ""
+        echo "Commands:"
+        echo "  up          Boot VM (create on first run)"
+        echo "  down        Stop VM"
+        echo "  destroy     Delete VM entirely"
+        echo "  build       Build mill binary inside VM"
+        echo "  test [-- args]  Full pipeline: up → build → setup → test → teardown"
+        echo "  exec <cmd>  Run command inside VM"
+        echo "  ssh         Interactive shell into VM"
+        echo "  clean       Run netns-teardown inside VM"
+        echo "  status      Show VM state and namespace list"
+        echo ""
+        echo "Environment:"
+        echo "  MILL_HARNESS_NODES  Number of nodes (default: 3)"
+        echo "  MILL_HARNESS_VM     Lima instance name (default: mill)"
+        echo "  MILL_TEST_FILTER    Passed to cargo test as filter"
+        ;;
+    *)
+        echo "Unknown command: $1"
+        echo "Run 'mill-harness help' for usage."
+        exit 1
+        ;;
+esac

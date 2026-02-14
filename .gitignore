@@ -1,0 +1,25 @@
+# Build
+/target/
+/target-linux/
+.quench/
+
+# Pulumi
+node_modules/
+bun.lock
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+.terraform.tfstate.lock.info
+*.tfstate
+*.tfstate.backup
+terraform.tfvars
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS
+.DS_Store
