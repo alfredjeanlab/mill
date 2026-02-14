@@ -1,0 +1,38 @@
+[package]
+name = "mill-proxy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mill-config = { path = "../config" }
+parking_lot = { workspace = true }
+
+base64 = { workspace = true }
+bytes = "1"
+futures-util = "0.3"
+http = "1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["http1", "http2", "server", "client"] }
+hyper-util = { version = "0.1", features = ["tokio", "http1", "http2", "server-auto", "client-legacy"] }
+instant-acme = { version = "0.8", features = ["rcgen"] }
+rcgen = "0.14"
+ring = "0.17"
+serde_json = { workspace = true }
+rustls = { version = "0.23", features = ["ring"] }
+rustls-pemfile = "2"
+rustls-pki-types = "1"
+thiserror.workspace = true
+tokio.workspace = true
+tokio-rustls = "0.26"
+tokio-tungstenite = "0.26"
+tokio-util = { workspace = true, features = ["rt"] }
+tracing = { workspace = true }
+x509-parser = "0.18"
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

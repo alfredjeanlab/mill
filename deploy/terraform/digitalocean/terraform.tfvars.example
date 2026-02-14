@@ -1,0 +1,6 @@
+do_token              = "dop_v1_..."
+ssh_key_fingerprint   = "ab:cd:ef:..."
+region                = "nyc1"
+node_count            = 3
+node_size             = "s-2vcpu-4gb"
+cluster_name          = "mill"

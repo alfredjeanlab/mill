@@ -1,0 +1,58 @@
+# JSON API with Postgres (managed, external) and ephemeral task workers.
+#
+# Setup:
+#   mill secret set api.database-url "postgres://user:pass@managed-db:5432/api"
+#   mill secret set api.jwt-secret "$(openssl rand -hex 32)"
+#
+# Deploy:
+#   mill deploy -f examples/backend.mill
+#
+# Verify:
+#   curl https://api.example.com/v1/health
+#   mill spawn report-generator --env REPORT_ID=123
+#   mill ps
+
+service "api" {
+  image    = "myapi:latest"
+  port     = 8080
+  replicas = 2
+  cpu      = 1
+  memory   = "512M"
+
+  env {
+    DATABASE_URL = "${secret(api.database-url)}"
+    JWT_SECRET   = "${secret(api.jwt-secret)}"
+    ENVIRONMENT  = "production"
+  }
+
+  health {
+    path     = "/v1/health"
+    interval = "10s"
+  }
+
+  route "api.example.com" {
+    path = "/"
+  }
+}
+
+task "report-generator" {
+  image   = "myapi:latest"
+  cpu     = 2
+  memory  = "2G"
+  timeout = "30m"
+  env {
+    DATABASE_URL = "${secret(api.database-url)}"
+    MODE         = "report"
+  }
+}
+
+task "migration" {
+  image   = "myapi:latest"
+  cpu     = 0.5
+  memory  = "256M"
+  timeout = "10m"
+  env {
+    DATABASE_URL = "${secret(api.database-url)}"
+    MODE         = "migrate"
+  }
+}

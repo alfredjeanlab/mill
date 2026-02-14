@@ -1,0 +1,11 @@
+{
+  "name": "mill-digitalocean",
+  "main": "index.ts",
+  "devDependencies": {
+    "@types/node": "^22"
+  },
+  "dependencies": {
+    "@pulumi/pulumi": "^3",
+    "@pulumi/digitalocean": "^4"
+  }
+}

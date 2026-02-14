@@ -1,0 +1,23 @@
+[package]
+name = "mill-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+support = ["dep:tokio"]
+
+[dependencies]
+bytesize = { workspace = true }
+hcl-rs = "0.18"
+humantime = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+yare = { workspace = true }
+
+[lints]
+workspace = true

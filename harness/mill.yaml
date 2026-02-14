@@ -1,0 +1,123 @@
+# Lima VM definition for mill smoke tests.
+#
+# Provides a full Linux environment with:
+#   - WireGuard (built into kernel 6.8+)
+#   - containerd + runc
+#   - Rust toolchain (builds mill natively for Linux)
+#   - Network namespace support for multi-node isolation
+#
+# Usage:
+#   limactl create --name=mill harness/mill.yaml
+#   limactl start mill
+
+# Use Apple Virtualization.framework on macOS, QEMU on Linux.
+vmType: vz
+
+images:
+  - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img"
+    arch: "x86_64"
+  - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
+    arch: "aarch64"
+
+cpus: 4
+memory: "8GiB"
+disk: "30GiB"
+
+# Mount the home directory writable via virtiofs.
+# Project lives at /workspace/Developer/mill inside the VM.
+mounts:
+  - location: "~"
+    writable: true
+    mountPoint: /workspace
+
+# We manage containerd ourselves via cloud-init.
+containerd:
+  system: false
+  user: false
+
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+
+      # --- System packages ---
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update
+      apt-get install -y \
+        containerd \
+        runc \
+        wireguard-tools \
+        iproute2 \
+        iputils-ping \
+        iptables \
+        bridge-utils \
+        build-essential \
+        pkg-config \
+        libssl-dev \
+        protobuf-compiler \
+        curl
+
+      # --- Configure containerd for cgroups v2 (systemd driver) ---
+      mkdir -p /etc/containerd
+      cat > /etc/containerd/config.toml <<'TOML'
+      version = 2
+
+      [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
+        runtime_type = "io.containerd.runc.v2"
+      [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
+        SystemdCgroup = true
+      TOML
+      systemctl restart containerd
+      systemctl enable containerd
+
+      # --- Kernel networking settings ---
+      cat > /etc/sysctl.d/99-mill.conf <<'SYSCTL'
+      net.ipv4.ip_forward = 1
+      net.ipv4.conf.default.rp_filter = 0
+      net.ipv4.conf.all.rp_filter = 0
+      SYSCTL
+      sysctl --system
+
+      # --- Create test data directory ---
+      mkdir -p /var/lib/mill-test
+
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -eux
+
+      # --- Install Rust toolchain ---
+      if ! command -v rustup &>/dev/null; then
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+      fi
+      source "$HOME/.cargo/env"
+      rustup update stable
+
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+
+      # --- Pre-pull test images into the mill namespace ---
+      ctr namespace create mill 2>/dev/null || true
+      ctr -n mill image pull docker.io/library/nginx:1.25-alpine || true
+      ctr -n mill image pull docker.io/library/busybox:latest || true
+
+probes:
+  - description: "containerd is running"
+    script: |
+      #!/bin/bash
+      systemctl is-active containerd
+    hint: "Waiting for containerd to start..."
+
+  - description: "Rust toolchain is installed"
+    script: |
+      #!/bin/bash
+      test -x /home/*/.cargo/bin/rustc && /home/*/.cargo/bin/rustc --version
+    hint: "Waiting for Rust toolchain installation..."
+
+hostResolver:
+  enabled: true
+
+portForwards: []

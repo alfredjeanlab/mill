@@ -1,0 +1,19 @@
+[package]
+name = "smoke"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+mill-config = { path = "../../crates/config", features = ["support"] }
+mill-node = { path = "../../crates/node" }
+mill-raft = { path = "../../crates/raft" }
+mill-support = { path = "../../crates/support" }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde_json = { workspace = true }
+tempfile.workspace = true
+tokio = { workspace = true }
+
+[lints]
+workspace = true
